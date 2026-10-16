@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>语音报数</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="语音报数">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#f3efe6">
+
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{--bg:#f3efe6;--ink:#1d2b3a;--sub:#6b7480;--accent:#1f6f5c;--stop:#b5472f;--card:#fffdf8;--line:#d9d2c3;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14181d;--ink:#eef0f2;--sub:#97a0aa;--accent:#4fb89c;--stop:#e0806a;--card:#1c2229;--line:#2e3640}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font-family:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;display:flex;flex-direction:column;padding:0 20px}
+main{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+#num{font-size:clamp(120px,40vw,220px);font-weight:700;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.03em}
+#status{color:var(--sub);font-size:16px;min-height:22px}
+.bar{width:100%;max-width:360px;height:6px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:12px}
+#fill{height:100%;width:0;background:var(--accent);transition:width .2s}
+.btns{display:flex;gap:12px;margin-bottom:18px}
+button{flex:1;height:60px;border-radius:16px;border:0;font-size:20px;font-weight:600;color:#fff;font-family:inherit}
+button:active{transform:scale(.97)}
+#go{background:var(--accent);flex:1.6}
+#stop{background:var(--stop)}
+#reset{background:var(--card);color:var(--ink);border:1.5px solid var(--line)}
+footer{display:flex;flex-direction:column;align-items:flex-start;gap:10px;padding-bottom:16px}
+.iv{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px;display:inline-flex;flex-direction:column;gap:6px}
+.iv span{font-size:13px;color:var(--sub)}
+.opts{display:flex;gap:6px}
+.opts label{position:relative}
+.opts input{position:absolute;opacity:0}
+.opts b{display:block;min-width:52px;text-align:center;padding:9px 6px;border-radius:10px;border:1.5px solid var(--line);font-size:15px;font-weight:600}
+.opts input:checked+b{background:var(--accent);border-color:var(--accent);color:#fff}
+.opts input:focus-visible+b{outline:2px solid var(--ink);outline-offset:2px}
+</style>
+</head>
+<body>
+<main>
+  <div id="num">0</div>
+  <div id="status">点“开始”听报数</div>
+  <div class="bar"><div id="fill"></div></div>
+</main>
+<div class="btns">
+  <button id="go">开始</button>
+  <button id="stop">停止</button>
+  <button id="reset">重置</button>
+</div>
+<footer>
+  <div class="iv">
+    <span id="vlabel">声音</span>
+    <div class="opts">
+      <label><input type="radio" name="vc" value="f" checked><b>女声</b></label>
+      <label><input type="radio" name="vc" value="m"><b>男声</b></label>
+    </div>
+  </div>
+  <div class="iv">
+    <span>报数间隔</span>
+    <div class="opts" id="opts">
+      <label><input type="radio" name="iv" value="500"><b>0.5秒</b></label>
+      <label><input type="radio" name="iv" value="1000" checked><b>1秒</b></label>
+      <label><input type="radio" name="iv" value="1500"><b>1.5秒</b></label>
+      <label><input type="radio" name="iv" value="2000"><b>2秒</b></label>
+    </div>
+  </div>
+</footer>
+<script>
+const synth = window.speechSynthesis;
+const numEl = document.getElementById('num'), st = document.getElementById('status'), fill = document.getElementById('fill');
+let cur = 0, running = false, timer = null, token = 0;
+
+function interval(){ return +document.querySelector('input[name=iv]:checked').value; }
+const MAX = 200;
+function show(n){ numEl.textContent = n; fill.style.width = (n / MAX * 100) + '%'; }
+
+let voices = [];
+const FEM = ['Tingting','Ting-Ting','婷婷'];
+const MALE = ['Reed'];
+const has = (v, list) => list.some(n => v.name.indexOf(n) > -1);
+const isMale = v => has(v, MALE);
+function preview(){
+  if(!synth) return;
+  const u = new SpeechSynthesisUtterance(running ? '' : '一，二，三');
+  applyVoice(u);
+  if(!running){ synth.cancel(); synth.speak(u); }
+}
+function loadVoices(){
+  voices = (synth ? synth.getVoices() : []).filter(v => /^zh/i.test(v.lang));
+}
+if(synth){ loadVoices(); synth.onvoiceschanged = loadVoices; }
+
+function pickVoice(names){
+  for(const n of names){
+    const hit = voices.filter(v => v.name.indexOf(n) > -1);
+    if(hit.length) return hit.find(v => /premium|enhanced|增强|优化|高品质/i.test(v.name)) || hit[0];
+  }
+  return null;
+}
+
+function applyVoice(u){
+  loadVoices();
+  let miss = false;
+  const g = document.querySelector('input[name=vc]:checked').value;
+  if(g === 'f'){
+    const v = pickVoice(FEM) || voices.find(x => !isMale(x)) || null;
+    miss = !pickVoice(FEM);
+    if(v){ u.voice = v; u.lang = v.lang; } else u.lang = 'zh-CN';
+    u.rate = 0.8; u.pitch = 1.05; u.volume = 0.9;   // 慢、柔、略低
+  } else {
+    const v = pickVoice(MALE);
+    miss = !v;
+    if(v){ u.voice = v; u.lang = v.lang; u.pitch = 0.85; }
+    else { const f = voices[0]; if(f){ u.voice = f; u.lang = f.lang; } else u.lang = 'zh-CN'; u.pitch = 0.5; }
+    u.rate = 0.82; u.volume = 1;                    // 低沉、稳
+  }
+  const nm = u.voice ? u.voice.name.replace(/[（(].*$/, '').trim() : '系统默认';
+  document.getElementById('vlabel').textContent = '声音：' + nm + (miss ? '（未找到该声音，请在系统设置里下载）' : '');
+}
+
+function speak(n, done){
+  const my = token;
+  let finished = false;
+  const fin = () => { if(finished || my !== token) return; finished = true; done(); };
+  const u = new SpeechSynthesisUtterance(String(n));
+  applyVoice(u);
+  u.onend = fin;
+  u.onerror = fin;
+  synth.speak(u);
+  setTimeout(fin, 4000); // 保险：防止 iOS 不触发 onend
+}
+
+function next(){
+  if(!running) return;
+  if(cur >= MAX){ running = false; st.textContent = '已读完 ' + MAX; return; }
+  cur++;
+  show(cur);
+  speak(cur, () => {
+    if(!running) return;
+    if(cur >= MAX){ running = false; st.textContent = '已读完 ' + MAX; return; }
+    timer = setTimeout(next, interval());
+  });
+}
+
+document.getElementById('go').onclick = () => {
+  if(running) return;
+  if(cur >= MAX) cur = 0;
+  running = true; token++;
+  st.textContent = '正在报数…';
+  // 在点击手势内先触发一次，解锁 iOS 语音
+  synth.cancel();
+  next();
+};
+
+document.getElementById('stop').onclick = () => {
+  running = false; token++;
+  clearTimeout(timer); synth.cancel();
+  st.textContent = cur ? '已停止，停在 ' + cur + '（点“开始”从下一个继续）' : '已停止';
+};
+
+document.getElementById('reset').onclick = () => {
+  running = false; token++;
+  clearTimeout(timer); synth.cancel();
+  cur = 0; show(0);
+  st.textContent = '已重置，点“开始”从 1 读起';
+};
+
+if(!synth){ st.textContent = '此浏览器不支持语音朗读'; }
+
+// 切换男/女声时立刻试听；报数中则从下一个数字起换声
+document.querySelectorAll('input[name=vc]').forEach(r => r.addEventListener('change', () => { preview(); }));
+</script>
+</body>
+</html>
